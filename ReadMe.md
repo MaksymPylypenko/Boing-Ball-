@@ -17,7 +17,7 @@ Email: pylypenm@myumanitoba.ca
 * `J`		- jump 
 * `K`		- set all forces to 0 (except gravity) 
 
-Implemented features:
+## Implemented features:
 - UV sphere 
 - Checkerboard texture 
 - 3D room with relflective borders
