@@ -2,6 +2,11 @@
 Author: Maksym Pylypenko
 Email: pylypenm@myumanitoba.ca
 
+## How to run?
+
+1. Open a VS project **`opengl.sln`**
+2. Press run (a new window should appear)
+
 ## Controls
 
 * `SPACE`	- change view (1 of 3)
@@ -27,3 +32,5 @@ The program was successfully tested using:
 * OS: Windows 10 using 
 * IDE: Visual Studio 2019 16.4
 * Graphics card: Intel® HD Graphics 3000
+
+
