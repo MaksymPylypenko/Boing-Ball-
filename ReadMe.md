@@ -7,6 +7,8 @@ Email: pylypenm@myumanitoba.ca
 1. Open a VS project **`opengl.sln`**
 2. Press run (a new window should appear)
 
+## Watch demo 
+* Click to watch on youtube
 [![Watch the demo](https://github.com/MaksymPylypenko/Boing-Ball-/blob/master/boing-ball.png)](https://www.youtube.com/watch?v=yWgwmrY4BJs)
 
 ## Controls
