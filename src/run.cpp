@@ -7,404 +7,236 @@
 #include <iostream>
 #include <vector>
 
-
-const char* WINDOW_TITLE = "Sphere";
+const char* WINDOW_TITLE = "Curves";
 const double FRAME_RATE_MS = 1000.0 / 60.0;
-const float PI = 3.1415926f;
-const float TWO_PI = PI * 2;
-
-// Lists
-std::vector<GLfloat> vertices;
-std::vector<GLfloat> normals;
-std::vector<GLuint> indices;
 
 
-// Array of rotation angles (in degrees) for each coordinate axis
-enum { Xaxis = 0, Yaxis = 1, Zaxis = 2, NumAxes = 3 };
-int      Axis = Xaxis;
-GLfloat  Theta[NumAxes] = { 0.0, 0.0, 0.0 };
+// Holds data that will be moved to GPU
+class Geometry {
+public:
+	std::vector<GLfloat> positions;
+	std::vector<GLfloat> colors;
+	std::vector<GLint> indices;
 
-// Uniforms
-GLuint ViewCamera;
-GLuint ViewSphere, ViewSphereInvTra, sphereIndex;
-GLuint ViewGround, ViewGroundInvTra, groundIndex, wallIndex;
-GLuint ViewGroundShadow, groundShadowIndex;
-GLuint ViewWallShadow, wallShadowIndex;
-GLuint Projection;
-GLboolean UseLighting;
-
-// Physics
-float g = 9.8f;
-float mass = 0.0002f;
-float velocity = 150;
-float gravity = -mass * g;
-float impulse = mass * velocity;
-
-// Default settings
-float radius = 0.5f;
-glm::vec3 currPosition(0, 1, -1);
-glm::vec3 vCurrent(impulse, impulse, impulse);
-bool rest = false;
-bool pause = false;
-int view = 0;
-
-glm::vec3 lightPositionTop(0.0f, 20.0f, 0.0f);
-glm::vec3 lightPositionNear(0.0f, +1.5f, 20.0f);
-
-// Borders
-float ground = -2;
-float walls[4] = { -2.0f, 2.0f , -2.0f, 1.9f };
-enum { leftWall = 0, rightWall = 1, farWall = 2, nearWall = 3 };
-
-int
-makeGround(int lastIndex)
-{
-	float xLength = 4.0;
-	float yLength = 4.0;
-
-	float xPoints = 31; // must be odd for checkerboard pattern
-	float yPoints = yLength / xLength * xPoints; // normalize squares (each side is equal)
-
-
-	float dx = xLength / xPoints;
-	float dy = yLength / yPoints;
-	float offsetX = -xLength / 2 + dx / 2; // center at 0,0,0
-	float offsetY = -2.0f + dy;
-
-	glm::vec3 n(0, -1, 0);
-
-	for (int i = 0; i < yPoints; i++) {
-		GLfloat y = i * dx;
-
-		for (float j = 0; j < xPoints; j++) {
-			GLfloat z = 0;
-			GLfloat x = j * dy;
-
-			vertices.push_back(x + offsetX);
-			vertices.push_back(y + offsetY);
-			vertices.push_back(z);
-			vertices.push_back(1);
-
-			normals.push_back(n.x);
-			normals.push_back(n.y);
-			normals.push_back(n.z);
-		}
+	Geometry() {
+		positions = std::vector<GLfloat>();
+		colors = std::vector<GLfloat>();
+		indices = std::vector<GLint>();
 	}
 
-	for (int i = 0; i < (round(yPoints) - 1) * round(xPoints); i++) {
+	Geometry(std::vector<GLfloat> positions, std::vector<GLfloat> colors, std::vector<GLint> indices)
+	{
+		this->positions = positions;
+		this->colors = colors;
+		this->indices = indices;
+	}
 
-		if (i % (int)xPoints != xPoints - 1) // edge
+	void add(glm::vec2 position, glm::vec4 color) {
+		positions.push_back(position.x);
+		positions.push_back(position.y);
+		colors.push_back(color.r);
+		colors.push_back(color.g);
+		colors.push_back(color.b);
+		colors.push_back(color.a);
+		indices.push_back(indices.size());
+	}
+
+	int numElements() {
+		return indices.size();
+	}
+
+	void load(int vao, GLuint vPosition, GLuint vColor) {
+		std::size_t N1 = sizeof(GLfloat) * numElements() * 2;
+		std::size_t N2 = sizeof(GLfloat) * numElements() * 4;
+		std::size_t N3 = N1 + N2;
+		std::size_t K1 = sizeof(GLuint) * numElements();
+
+		GLuint buffer;
+		glBindVertexArray(vao);
+
+		// Create and initialize a buffer object
+		glGenBuffers(1, &buffer);
+		glBindBuffer(GL_ARRAY_BUFFER, buffer);
+		glBufferData(GL_ARRAY_BUFFER, N3, NULL, GL_DYNAMIC_DRAW);
+		glBufferSubData(GL_ARRAY_BUFFER, 0, N1, positions.data());
+		glBufferSubData(GL_ARRAY_BUFFER, N1, N2, colors.data());
+
+		glGenBuffers(1, &buffer);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, K1, indices.data(), GL_DYNAMIC_DRAW);
+
+		// Set up arrays	
+		glEnableVertexAttribArray(vPosition);
+		glVertexAttribPointer(vPosition, 2, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(0));
+
+		glEnableVertexAttribArray(vColor);
+		glVertexAttribPointer(vColor, 4, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(N1));
+	}
+};
+
+
+class Point {
+public:
+	glm::vec2 position;
+	glm::vec4 color;
+	Point(glm::vec2 position, glm::vec4 color) {
+		this->position = position;
+		this->color = color;
+	}
+};
+
+// Holds a sequence of points (e.g control points or points that form a curve)
+class Points {
+public:
+	std::vector<Point> points;
+
+	void add(Point p) {
+		points.push_back(p);
+	}
+
+	Point pop() {
+		Point ret = points.back();
+		points.pop_back();
+		return ret;
+	}
+
+	glm::vec2 getPosition(int i) {
+		return points[i].position;
+	}
+
+	int numElements() {
+		return points.size();
+	}
+
+	void extend(Points b) {
+		points.insert(points.end(), b.points.begin(), b.points.end());
+	}
+
+	Geometry extractGeometry() {
+		std::vector<GLfloat> positions;
+		std::vector<GLfloat> colors;
+		std::vector<GLint> indices;
+
+		for (std::size_t i = 0; i < points.size(); i++)
 		{
-			// right triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + xPoints + 1));
-			indices.push_back(GLuint(lastIndex + i + 1));
-
-			// left triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + xPoints));
-			indices.push_back(GLuint(lastIndex + i + xPoints + 1));
+			positions.push_back(points[i].position.x);
+			positions.push_back(points[i].position.y);
+			colors.push_back(points[i].color.r);
+			colors.push_back(points[i].color.g);
+			colors.push_back(points[i].color.b);
+			colors.push_back(points[i].color.a);
+			indices.push_back(indices.size());
 		}
+		return Geometry(positions, colors, indices);
 	}
 
-	return vertices.size() / 4; // will be used in the shader
-}
-
-
-int
-makeWall(int lastIndex)
-{
-	float xLength = 4.0;
-	float zLength = 4.0;
-
-	float xPoints = 31; // must be odd for checkerboard pattern
-	float zPoints = zLength / xLength * xPoints; // normalize squares (each side is equal)
-
-	float dx = xLength / xPoints;
-	float dz = zLength / zPoints;
-	float offsetX = -xLength / 2 + dx / 2; // center at 0,0,0
-	float offsetY = 2.0;
-	float offsetZ = 0;
-
-	glm::vec3 n(0, 0, 1);
-
-	for (int i = 0; i < zPoints; i++) {
-		GLfloat z = i * dz + offsetZ;
-
-		for (float j = 0; j < xPoints; j++) {
-			GLfloat x = j * dx;
-			GLfloat y = offsetY;
-
-			vertices.push_back(x + offsetX);
-			vertices.push_back(y);
-			vertices.push_back(z);
-			vertices.push_back(1);
-
-			normals.push_back(n.x);
-			normals.push_back(n.y);
-			normals.push_back(n.z);
-		}
-	}
-
-	for (int i = 0; i < (round(zPoints) - 1) * round(xPoints); i++) {
-
-		if (i % (int)xPoints != xPoints - 1) // edge
+	Points catmullRomLerp(int i0, int i1, int i2, int i3) {
+		
+		glm::vec2 a = getPosition(i0);
+		glm::vec2 b = getPosition(i1);
+		glm::vec2 c = getPosition(i2);
+		glm::vec2 d = getPosition(i3);
+		
+		Points curve;
+		for (float t = 1; t > 0; t -= 0.02f)
 		{
-			// right triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + xPoints + 1));
-			indices.push_back(GLuint(lastIndex + i + 1));
+			float tSq = t * t;
+			float tQu = tSq * t;
 
-			// left triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + xPoints));
-			indices.push_back(GLuint(lastIndex + i + xPoints + 1));
+			float q1 = -tQu + 2.0f * tSq - t;
+			float q2 = 3.0f * tQu - 5.0f * tSq + 2.0f;
+			float q3 = -3.0f * tQu + 4.0f * tSq + t;
+			float q4 = tQu - tSq;
+
+			float currX = 0.5f * (a.x * q1 + b.x * q2 + c.x * q3 + d.x * q4);
+			float currY = 0.5f * (a.y * q1 + b.y * q2 + c.y * q3 + d.y * q4);
+
+			curve.add(Point(glm::vec2(currX, currY), glm::vec4(0.9, 0.3, 0.3, 1)));
 		}
+		return curve;
 	}
 
-	return vertices.size() / 4; // will be used in the shader
-}
+	//Points RecursiveLerp(Points cp) {
+	//	Points curve;
+	//	for (int i = 1; i < cp.numElements()-1; i++) {
+	//		Points subCurve = Lerp(cp.getPosition(i - 1), cp.getPosition(i), cp.getPosition(i + 1), cp.getPosition(i + 2));
+	//		curve.extend(subCurve);
+	//	}	
+	//	return curve;
+	//}
 
-int
-makeSphere(int lastIndex, float radius)
-{
-	// UI Sphere variables	
-	int circlePoints = 22; // EVEN (for checkerboard pattern)        
-	int arcPoints = 15; // ODD (for checkerboard pattern), remember that north and south polls have duplicate points for each point on a circle	 	  
+	int lineLerp(int n1, int n2, float t)
+	{
+		int diff = n2 - n1;
 
-	for (float i = 0; i <= circlePoints; i++) {
-
-		float t = i / (circlePoints);
-		float phi = t * TWO_PI;
-
-		// iterate points on an arc from (0,0,-z) to (0,0,+z)
-		for (float j = 0; j < arcPoints; j++) {
-
-			float t = j / (arcPoints - 1);
-			float theta = t * PI;
-
-			// get spherical coordinates
-			// formulas: https://en.wikipedia.org/wiki/Spherical_coordinate_system
-			GLfloat x = radius * sin(theta) * cos(phi);
-			GLfloat y = radius * sin(theta) * sin(phi);
-			GLfloat z = radius * cos(theta);
-
-			vertices.push_back(x);
-			vertices.push_back(y);
-			vertices.push_back(z);
-			vertices.push_back(1.0f);
-
-			glm::vec3 n = normalize(glm::vec3(x, y, z));
-
-			normals.push_back(n.x);
-			normals.push_back(n.y);
-			normals.push_back(n.z);
-		}
+		return n1 + (diff * t);
 	}
 
-	int squares = arcPoints * (circlePoints)-1;
+	// Derrived from https://stackoverflow.com/questions/37642168/how-to-convert-quadratic-bezier-curve-code-into-cubic-bezier-curve/37642695#37642695
+	Points BezierLerp(int i0, int i1, int i2, int i3) {
 
-	for (int i = 0; i <= squares; i++) {
-
-		if (i % arcPoints != arcPoints - 1) // avoid north poll points
+		glm::vec2 a = getPosition(i0);
+		glm::vec2 b = getPosition(i1);
+		glm::vec2 c = getPosition(i2);
+		glm::vec2 d = getPosition(i3);
+		
+		Points curve;
+		for (float i = 0; i < 1; i += 0.01)
 		{
-			// right triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + arcPoints + 1));
-			indices.push_back(GLuint(lastIndex + i + 1));
+			// The Green Lines
+			float xa = lineLerp(a.x, b.x, i);
+			float ya = lineLerp(a.y, b.y, i);
+			float xb = lineLerp(b.x, c.x, i);
+			float yb = lineLerp(b.y, c.y, i);
+			float xc = lineLerp(c.x, d.x, i);
+			float yc = lineLerp(c.y, d.y, i);
 
-			// left triangle
-			indices.push_back(GLuint(lastIndex + i));
-			indices.push_back(GLuint(lastIndex + i + arcPoints));
-			indices.push_back(GLuint(lastIndex + i + arcPoints + 1));
+			// The Blue Line
+			float xm = lineLerp(xa, xb, i);
+			float ym = lineLerp(ya, yb, i);
+			float xn = lineLerp(xb, xc, i);
+			float yn = lineLerp(yb, yc, i);
+			
+			// The Black Dot
+			float currX = lineLerp(xm, xn, i);
+			float currY = lineLerp(ym, yn, i);
+			curve.add(Point(glm::vec2(currX, currY), glm::vec4(0.9, 0.3, 0.3, 1)));		
 		}
 	}
-	return vertices.size() / 4; // will be used in the shader
-}
+	   
 
-int makeWallShadow(int lastIndex, float radius) {
-	GLfloat centerX = 0;
-	GLfloat centerY = 0;
+};
 
-	int circlePoints = 22;
-
-	vertices.push_back(centerX);
-	vertices.push_back(centerY);
-	vertices.push_back(0);
-	vertices.push_back(1.0f);
-
-	// glm::vec3 n(0, -1, 0);
-	//normals.push_back(n.x);
-	//normals.push_back(n.y);
-	//normals.push_back(n.z);
-
-
-	for (float i = 0; i <= circlePoints; i++) {
-		float t = i / (circlePoints);
-		float phi = t * TWO_PI;
-
-		GLfloat x = centerX + radius * cos(phi);
-		GLfloat y = centerY + radius * sin(phi);
-		GLfloat z = 0;
-
-		vertices.push_back(x);
-		vertices.push_back(y);
-		vertices.push_back(z);
-		vertices.push_back(1.0f);
-
-		// The code will probably break if i dont have normals for every object					
-		/*normals.push_back(n.x);
-		normals.push_back(n.y);
-		normals.push_back(n.z);*/
-	}
-
-	for (int i = 0; i < circlePoints; i++) {
-
-		// triangle
-		indices.push_back(GLuint(lastIndex + 1)); // center
-		indices.push_back(GLuint(lastIndex + 1 + i)); // on circle
-		indices.push_back(GLuint(lastIndex + 1 + i + 1)); // next on circle			
-	}
-	return vertices.size() / 4; // will be used in the shader
-}
-
-int makeGroundShadow(int lastIndex, float radius) {
-	GLfloat centerX = 0;
-	GLfloat centerY = 0;
-
-	int circlePoints = 22;
-
-	vertices.push_back(centerX);
-	vertices.push_back(centerY);
-	vertices.push_back(0);
-	vertices.push_back(1.0f);
-
-	//glm::vec3 n(0, -1, 0);
-	//normals.push_back(n.x);
-	//normals.push_back(n.y);
-	//normals.push_back(n.z);
-
-
-	for (float i = 0; i <= circlePoints; i++) {
-		float t = i / (circlePoints);
-		float phi = t * TWO_PI;
-
-		GLfloat x = centerX + radius * cos(phi);
-		GLfloat y = centerY + radius * sin(phi);
-		GLfloat z = 0;
-
-		vertices.push_back(x);
-		vertices.push_back(z);
-		vertices.push_back(y);
-		vertices.push_back(1.0f);
-
-		// The code will probably break if i dont have normals for every object	
-	/*	normals.push_back(n.x);
-		normals.push_back(n.y);
-		normals.push_back(n.z);*/
-	}
-
-	for (int i = 0; i < circlePoints; i++) {
-
-		// triangle
-		indices.push_back(GLuint(lastIndex + 1)); // center
-		indices.push_back(GLuint(lastIndex + 1 + i)); // on circle
-		indices.push_back(GLuint(lastIndex + 1 + i + 1)); // next on circle			
-	}
-	return vertices.size() / 4; // will be used in the shader
-}
-
-
-void initLight(GLuint shader) {
-	// Initialize shader lighting parameters
-	glm::vec4 light_position_top(lightPositionTop.x, lightPositionTop.y, lightPositionTop.z, 0.0);
-	glm::vec4 light_position_near(lightPositionNear.x, lightPositionNear.y, lightPositionNear.z, 0.0);
-	glm::vec4 light_ambient(0.9, 0.9, 0.9, 1.0); // 0.9 looks fine
-	glm::vec4 light_diffuse(0.07, 0.07, 0.07, 1.0);
-	glm::vec4 light_specular(0.05, 0.05, 0.05, 1.0);
-
-	UseLighting = glGetUniformLocation(shader, "UseLighting");
-	glUniform1f(UseLighting, true);
-
-	glUniform4fv(glGetUniformLocation(shader, "AmbientLight"), 1, glm::value_ptr(light_ambient));
-	glUniform4fv(glGetUniformLocation(shader, "DiffuseLight"), 1, glm::value_ptr(light_diffuse));
-	glUniform4fv(glGetUniformLocation(shader, "SpecularLight"), 1, glm::value_ptr(light_specular));
-	glUniform4fv(glGetUniformLocation(shader, "lightPositionTop"), 1, glm::value_ptr(light_position_top));
-	glUniform4fv(glGetUniformLocation(shader, "lightPositionNear"), 1, glm::value_ptr(light_position_near));
-}
 //----------------------------------------------------------------------------
 
 // OpenGL initialization
+GLuint shader;
+GLuint vPosition;
+GLuint vColor;
+GLuint VAO[2];
+enum objects { ControlPointsID, CurvePointsID };
+
+// Data 
+Points cp;
+Points curve;
+
 void
 init()
 {
-	int endOfGround = makeGround(0);
-	int endOfWall = makeWall(endOfGround); // I really should just rotate ground instead... 
-	int endOfSpehre = makeSphere(endOfWall, radius);
-	int enfOfGroundShadow = makeGroundShadow(endOfSpehre, radius);
-	int enfOfWallShadow = makeWallShadow(enfOfGroundShadow, radius);
-
-	// Bind and create Vertex Array Objects
-	GLuint vao;
-	glGenVertexArrays(1, &vao);
-	glBindVertexArray(vao);
-
-	// Create Vertex Buffer Object
-	GLuint buffer;
-
-	// Load geomerty to GPU
-	glGenBuffers(1, &buffer);
-	glBindBuffer(GL_ARRAY_BUFFER, buffer);
-
-	//glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * (vertices.size() + normals.size()), NULL, GL_STATIC_DRAW);
-	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(GLfloat) * vertices.size(), vertices.data());
-	glBufferSubData(GL_ARRAY_BUFFER, sizeof(GLfloat) * vertices.size(), sizeof(GLfloat) * normals.size(), normals.data());
-
-	glGenBuffers(1, &buffer);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLuint) * indices.size(), indices.data(), GL_STATIC_DRAW);
-
-	// Load Shader
-	GLuint shader = InitShader("vshader.glsl", "fshader.glsl");
+	// Load shaders and use the resulting shader program
+	shader = InitShader("vshader.glsl", "fshader.glsl");
 	glUseProgram(shader);
 
-	// Set up vertex arrays
-	GLuint vPosition = glGetAttribLocation(shader, "vPosition");
-	glEnableVertexAttribArray(vPosition);
-	glVertexAttribPointer(vPosition, 4, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(0));
-
-	GLuint vNormal = glGetAttribLocation(shader, "vNormal");
-	glEnableVertexAttribArray(vNormal);
-	glVertexAttribPointer(vNormal, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(sizeof(GLuint) * vertices.size()));
-
-	// Retrieve transformation uniform variable locations
-	ViewCamera = glGetUniformLocation(shader, "ViewCamera");
-	ViewSphere = glGetUniformLocation(shader, "ViewSphere");
-	ViewGround = glGetUniformLocation(shader, "ViewGround");
-	ViewGroundShadow = glGetUniformLocation(shader, "ViewGroundShadow");
-	ViewWallShadow = glGetUniformLocation(shader, "ViewWallShadow");
-	ViewSphereInvTra = glGetUniformLocation(shader, "ViewSphereInvTra");
-	ViewGroundInvTra = glGetUniformLocation(shader, "ViewGroundInvTra");
-	Projection = glGetUniformLocation(shader, "Projection");
-
-	groundIndex = glGetUniformLocation(shader, "groundIndex");
-	wallIndex = glGetUniformLocation(shader, "wallIndex");
-	sphereIndex = glGetUniformLocation(shader, "sphereIndex");
-	groundShadowIndex = glGetUniformLocation(shader, "groundShadowIndex");
-	glUniform1i(groundIndex, endOfGround);
-	glUniform1i(wallIndex, endOfWall);
-	glUniform1i(sphereIndex, endOfSpehre);
-	glUniform1i(groundShadowIndex, enfOfGroundShadow);
-
-	initLight(shader);
-
-	glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
-
+	vPosition = glGetAttribLocation(shader, "vPosition");
+	vColor = glGetAttribLocation(shader, "vColor");
+	   
+	// Create Vertex Array Objects
+	glGenVertexArrays(2, VAO);
+	   
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(1.0, 1.0, 1.0, 1.0);
-
 }
+
 
 //----------------------------------------------------------------------------
 
@@ -413,105 +245,36 @@ display(void)
 {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	glm::vec3 viewer_pos(0.0, 0.0, 6.9);
+	// need to bind things here ...
+	// make a loop to draw multiple curve segments 
+
+	// Load geomerty to GPU			
+	cp.extractGeometry().load(VAO[ControlPointsID], vPosition, vColor);
+	curve.extractGeometry().load(VAO[CurvePointsID], vPosition, vColor);
 
 
-	//  Generate model-view matrices
-	glm::mat4 view_sphere;
+	glBindVertexArray(VAO[ControlPointsID]);
 	{
-		glm::mat4 trans, rot;
-		trans = glm::translate(trans, currPosition);
-		trans = glm::translate(trans, -viewer_pos);
-
-		rot = glm::rotate(rot, glm::radians(-20.0f), glm::vec3(0, 0, 1)); // 3
-		rot = glm::rotate(rot, glm::radians(90.0f), glm::vec3(1, 0, 0)); // 2
-		rot = glm::rotate(rot, glm::radians(Theta[Yaxis]), glm::vec3(0, 0, 1)); // 1	
-		view_sphere = trans * rot;
+		glPointSize(10.0f);
+		glDrawElements(GL_POINTS, cp.numElements(), GL_UNSIGNED_INT, 0);
 	}
 
-	glm::mat4 view_wall_shadow;
+	glBindVertexArray(VAO[CurvePointsID]);
 	{
-		glm::vec3 u = glm::normalize(lightPositionNear + currPosition);
-		float steps = lightPositionNear.z / u.z; // how much longer than normalized
-		float magicFactor = 0.3; // pretend that the light is further than it actually is 
-		float dy = u.y * steps * magicFactor; // undo normalization 
-
-		glm::mat4 trans;
-		glm::vec3 change(currPosition.x, currPosition.y + dy, walls[farWall] + 0.01);
-		trans = glm::translate(trans, change);
-		trans = glm::translate(trans, -viewer_pos);
-		view_wall_shadow = trans;
+		glPointSize(6.0f);
+		glDrawElements(GL_POINTS, curve.numElements(), GL_UNSIGNED_INT, 0);
 	}
 
-	glm::mat4 view_ground_shadow;
-	{
-		glm::vec3 u = glm::normalize(lightPositionTop + currPosition);
-		float steps = lightPositionTop.y / u.y; // how much longer than normalized
-		float magicFactor = 0.3; // pretend that the light is further than it actually is 
-		float dx = u.x * steps * magicFactor; // undo normalization 
 
-		glm::mat4 trans;
-		glm::vec3 change(currPosition.x + dx, ground + 0.01, currPosition.z);
-		trans = glm::translate(trans, change);
-		trans = glm::translate(trans, -viewer_pos);
-		view_ground_shadow = trans;
-	}
-
-	glm::mat4 view_ground;
-	{
-		glm::mat4 trans, rot;
-		trans = glm::translate(trans, glm::vec3(0, -2, 0));
-		trans = glm::translate(trans, -viewer_pos);
-		rot = glm::rotate(rot, glm::radians(-90.0f), glm::vec3(1, 0, 0));
-		view_ground = trans * rot;
-	}
-
-	glm::mat4 view_camera;
-	{
-		glm::mat4 rot, trans;
-		trans = glm::mat4();
-		rot = glm::mat4();
-
-		if (view == 1)
-		{
-			trans = glm::translate(trans, glm::vec3(0, -7.5, -5.3));
-			rot = glm::rotate(rot, glm::radians(80.0f), glm::vec3(1, 0, 0)); // 3		
-		}
-		else if (view == 2)
-		{
-			trans = glm::translate(trans, glm::vec3(7, 0, -7));
-			rot = glm::rotate(rot, glm::radians(90.0f), glm::vec3(0, 1, 0)); // 3	
-		}
-
-		view_camera = trans * rot;
-	}
-
-	// Can make more efficient by sending computed matricies
-	// However this would require additional variables...
-	//view_sphere = view_camera * view_sphere;
-	//view_ground = view_camera * view_ground;
-	//view_wall_shadow = view_camera * view_wall_shadow;
-	//view_ground_shadow = view_camera * view_ground_shadow;
-
-	glUniformMatrix4fv(ViewCamera, 1, GL_FALSE, glm::value_ptr(view_camera));
-	glUniformMatrix4fv(ViewSphere, 1, GL_FALSE, glm::value_ptr(view_sphere));
-	glUniformMatrix4fv(ViewGround, 1, GL_FALSE, glm::value_ptr(view_ground));
-	glUniformMatrix4fv(ViewGroundShadow, 1, GL_FALSE, glm::value_ptr(view_ground_shadow));
-	glUniformMatrix4fv(ViewWallShadow, 1, GL_FALSE, glm::value_ptr(view_wall_shadow));
-	glUniformMatrix4fv(ViewSphereInvTra, 1, GL_FALSE, glm::value_ptr(glm::transpose(glm::inverse(view_sphere))));
-	glUniformMatrix4fv(ViewGroundInvTra, 1, GL_FALSE, glm::value_ptr(glm::transpose(glm::inverse(view_ground))));
-
-	glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
-
-	//for (int i = 0; i < indices.size(); i += 3) {
-	//    glDrawElements(GL_LINE_LOOP, 3, GL_UNSIGNED_INT, (void*)(i * sizeof(GLuint)));
-	//}
 
 	glutSwapBuffers();
+
+
 }
 
 //----------------------------------------------------------------------------
 
+int mode;
 void
 keyboard(unsigned char key, int x, int y)
 {
@@ -521,127 +284,134 @@ keyboard(unsigned char key, int x, int y)
 		exit(EXIT_SUCCESS);
 		break;
 	case ' ':  // hold
-		view++;
-		if (view > 2) {
-			view = 0;
+		mode++;
+		if (mode > 2) {
+			mode = 0;
 		}
 		break;
-	case 'e':  // hold
-		pause = !pause;
-		break;
-	case 'w':
-		rest = false;
-		vCurrent.z -= impulse;
-		break;
-	case 'a':
-		rest = false;
-		vCurrent.x -= impulse;
-		break;
-	case 's':
-		rest = false;
-		vCurrent.z += impulse;
-		break;
-	case 'd':
-		rest = false;
-		vCurrent.x += impulse;
-		break;
-	case 'j':
-		rest = false;
-		vCurrent.y += impulse;
-		break;
-	case 'k':
-		rest = false;
-		vCurrent.y = 0;
-		vCurrent.x = 0;
-		vCurrent.z = 0;
-		break;
-	case 'r': // restart
-		rest = false;
-		currPosition = glm::vec3(0, 1, -1);
-		vCurrent = glm::vec3(impulse, impulse, impulse);
-		break;
-
 	}
 }
 
 
 //----------------------------------------------------------------------------
+
+int curr = 1;
+
+bool drawing = false;
+bool erasing = false;
+
+Points curveSegment;
+int tempPoints = 0;
+int tempMax = 1 / 0.02;
 
 void
 mouse(int button, int state, int x, int y)
 {
-	if (state == GLUT_DOWN) {
-		//switch (button) {
-		//	case GLUT_LEFT_BUTTON:    Axis = Xaxis;  break;
-		//	case GLUT_MIDDLE_BUTTON:  Axis = Yaxis;  break;
-		//	case GLUT_RIGHT_BUTTON:   Axis = Zaxis;  break;
-		//}
+	if (state == GLUT_DOWN && drawing == false && erasing == false) {
+		switch (button) {
+		case GLUT_LEFT_BUTTON:
+		{
+			float windowX = -1.0f + x * 2.0f / glutGet(GLUT_WINDOW_WIDTH);
+			float windowY = 1.0f + y * 2.0f / -glutGet(GLUT_WINDOW_HEIGHT);
+
+			if (cp.numElements() == 0) { // put extra 1st point
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+			}
+			else if (cp.numElements() == 2) { // 3 points is not enough to make a curve
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+			}
+			else if (cp.numElements() == 3) { // 5 points is enough to make 2 curves
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+
+				curveSegment = cp.catmullRomLerp(curr, curr + 1, curr + 2, curr + 3);
+				curveSegment.extend(cp.catmullRomLerp(curr - 1, curr, curr + 1, curr + 2));
+				cp.pop();
+
+				drawing = true;
+				tempPoints = 0;
+				tempMax = curveSegment.numElements();
+			}
+			else if (cp.numElements() > 3) {	// the last point is also a control point					
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+				cp.add(Point(glm::vec2(windowX, windowY), glm::vec4(0.1, 0.1, 0.1, 1.0)));
+				curveSegment = cp.catmullRomLerp(curr, curr + 1, curr + 2, curr + 3);
+				cp.pop();
+				drawing = true;
+				tempPoints = 0;
+				tempMax = curveSegment.numElements();
+			}
+			display();
+
+			//std::cout << "x=" << x << "\ty=" << y << "\n";						
+			break;
+		}
+		case GLUT_RIGHT_BUTTON:
+		{
+			if (cp.numElements() > 0) {
+				if (cp.numElements() > 3) { // remove last curve
+					cp.pop();
+					erasing = true;
+					display();
+				}
+				else if (cp.numElements() == 3) { // remove last 2 curves
+					cp.pop();
+					erasing = true;
+					display();
+				}
+				else if (cp.numElements() == 2) { // remove redundant starting point
+					cp.pop();
+					cp.pop();
+					display();
+					curr = 1;
+				}
+			}
+			break;
+		}
+		case GLUT_MIDDLE_BUTTON: break;
+		}
 	}
 }
 
 //----------------------------------------------------------------------------
 
-bool clockwiseRotation = true;
-
 void
 update(void)
 {
-
-
-	if (!pause && !rest) {
-		if (clockwiseRotation) {
-			Theta[Yaxis] -= 2;
+	if (drawing) {
+		if (curveSegment.numElements() > 0) {
+			Point p = curveSegment.pop();
+			curve.add(p);
+			tempPoints++;
+			display();
 		}
 		else {
-			Theta[Yaxis] += 2;
+			drawing = false;
+			curr++;
 		}
-
-		if (Theta[Yaxis] > 360.0) {
-			Theta[Yaxis] -= 360.0;
-		}
-		else if (Theta[Yaxis] < 0) {
-			Theta[Yaxis] += 360.0;
-		}
-
-
-		// apply forces to move 
-		currPosition += vCurrent;
-		currPosition.y += gravity;
-
-		// collision detection 
-		if (currPosition.y <= ground + radius) {
-			currPosition.y = ground + radius;
-			vCurrent.y = -vCurrent.y;
-			if (abs(vCurrent.y) <= abs(gravity))
-			{
-				rest = true;
-				vCurrent = glm::vec3(0, 0, 0);
-			}
-		}
-		if (currPosition.x >= walls[rightWall] - radius) {
-			currPosition.x = walls[rightWall] - radius;
-			vCurrent.x = -vCurrent.x;
-		}
-		else if (currPosition.x <= walls[leftWall] + radius) {
-			currPosition.x = walls[leftWall] + radius;
-			vCurrent.x = -vCurrent.x;
-		}
-
-		if (currPosition.z >= walls[nearWall] - radius) {
-			currPosition.z = walls[nearWall] - radius;
-			vCurrent.z = -vCurrent.z;
-		}
-		else if (currPosition.z <= walls[farWall] + radius) {
-			currPosition.z = walls[farWall] + radius;
-			vCurrent.z = -vCurrent.z;
-			//clockwiseRotation = !clockwiseRotation;
-
-		}
-
-		// apply gravity to a new force
-		vCurrent.y += gravity;
 	}
 
+	if (erasing) {
+		if (tempPoints > 0 && curve.numElements() > 0)
+		{
+			curve.pop();
+			display();
+			tempPoints--;
+		}
+		else {
+			erasing = false;
+			curr--;
+			if (cp.numElements() == 4) {
+				tempPoints = tempMax * 2;
+			}
+			else {
+				tempPoints = tempMax;
+			}
+
+		}
+
+	}
 }
 
 //----------------------------------------------------------------------------
@@ -650,10 +420,4 @@ void
 reshape(int width, int height)
 {
 	glViewport(0, 0, width, height);
-
-	GLfloat aspect = GLfloat(width) / height;
-	glm::mat4  projection = glm::perspective(glm::radians(45.0f), aspect, 0.5f, 20.0f);
-
-	projection = projection;
-	glUniformMatrix4fv(Projection, 1, GL_FALSE, glm::value_ptr(projection));
 }
