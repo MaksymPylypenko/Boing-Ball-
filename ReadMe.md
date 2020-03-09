@@ -1,6 +1,4 @@
 # Bouncing ball in a 3D room 
-Author: Maksym Pylypenko
-Email: pylypenm@myumanitoba.ca
 
 ## How to run?
 
